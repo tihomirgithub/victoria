@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import Navbar from '../components/Navbar';
+import LogoutButton from '@/components/LogoutButton';
 
 interface OrderItem {
   description: string;
@@ -11,15 +13,33 @@ interface OrderGroup {
   items: OrderItem[];
 }
 
+interface WorkItem {
+  description: string;
+}
+
+interface WorkGroup {
+  date: string;
+  name: string;
+  items: WorkItem[];
+}
+
+type CombinedGroup = {
+  date: string;
+  group_name?: string;
+  name?: string;
+  orderItems: OrderItem[];
+  workItems: WorkItem[];
+};
+
 export default function OrderPayment() {
   const [orders, setOrders] = useState<OrderGroup[]>([]);
+  const [works, setWorks] = useState<WorkGroup[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filteredOrders, setFilteredOrders] = useState<OrderGroup[]>([]);
-  const [latestDate, setLatestDate] = useState<string | null>(null);
+  const [filteredGroups, setFilteredGroups] = useState<CombinedGroup[]>([]);
   const [paymentInputs, setPaymentInputs] = useState<Record<number, number>>({});
   const [totalPayment, setTotalPayment] = useState(0);
-  const [firstDate, setFirstDate] = useState('');
-  const [lastDate, setLastDate] = useState('');
+  const [period, setPeriod] = useState({ firstDate: '', lastDate: '' });
+  const [latestDate, setLatestDate] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchLatestDate = async () => {
@@ -48,39 +68,76 @@ export default function OrderPayment() {
         if (response.ok) {
           const data = await response.json();
           setOrders(data);
-        } else {
-          console.error('Failed to fetch orders.');
         }
       } catch (error) {
         console.error('Error fetching orders:', error);
       }
     };
 
+    const fetchWorks = async () => {
+      try {
+        const response = await fetch('/api/works');
+        if (response.ok) {
+          const data = await response.json();
+          setWorks(data);
+        }
+      } catch (error) {
+        console.error('Error fetching works:', error);
+      }
+    };
+
     fetchOrders();
+    fetchWorks();
   }, []);
 
   useEffect(() => {
-    const filtered = orders.filter((order) => {
-      const matchesGroupName =
-        searchQuery.trim() === '' ||
-        order.group_name.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesDate =
-        !latestDate || new Date(order.date) > new Date(latestDate);
+    const combinedGroups: CombinedGroup[] = [];
 
-      return matchesGroupName && matchesDate;
+    const allDates = new Set([
+      ...orders.map((order) => order.date),
+      ...works.map((work) => work.date),
+    ]);
+
+    allDates.forEach((date) => {
+      const orderGroup = orders.find((order) => order.date === date);
+      const workGroup = works.find((work) => work.date === date);
+
+      combinedGroups.push({
+        date,
+        group_name: orderGroup?.group_name,
+        name: workGroup?.name,
+        orderItems: orderGroup?.items || [],
+        workItems: workGroup?.items || [],
+      });
     });
 
-    setFilteredOrders(filtered);
+    // Get today's date in the same format as the data
+    const today = new Date().toISOString().split('T')[0]; // Get only the date part (YYYY-MM-DD)
 
-    // Update period dates
+    const filtered = combinedGroups.filter((group) => {
+      const isValidSearch =
+        searchQuery.trim() === '' ||
+        group.group_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        group.name?.toLowerCase().includes(searchQuery.toLowerCase());
+      const isAfterLatestDate =
+        !latestDate || new Date(group.date) > new Date(latestDate);
+      const isBeforeToday = group.date <= today; // Ensure the date is not after today
+
+      return isValidSearch && isAfterLatestDate && isBeforeToday;
+    });
+
+    setFilteredGroups(filtered);
+
     if (filtered.length > 0) {
-      setFirstDate(filtered[0].date);
-      setLastDate(filtered[filtered.length - 1].date);
+      const sortedDates = filtered.map((group) => group.date).sort();
+      setPeriod({
+        firstDate: sortedDates[0],
+        lastDate: sortedDates[sortedDates.length - 1],
+      });
     } else {
-      setFirstDate('');
-      setLastDate('');
+      setPeriod({ firstDate: '', lastDate: '' });
     }
-  }, [orders, searchQuery, latestDate]);
+  }, [orders, works, searchQuery, latestDate]);
 
   useEffect(() => {
     const total = Object.values(paymentInputs).reduce(
@@ -104,8 +161,8 @@ export default function OrderPayment() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: searchQuery,
-          date: lastDate,
           amount: totalPayment,
+          date: `${period.lastDate}`,
         }),
       });
 
@@ -122,6 +179,8 @@ export default function OrderPayment() {
   };
 
   return (
+   <>
+    <Navbar />
     <div style={{ padding: '20px' }}>
       <input
         type="text"
@@ -135,20 +194,9 @@ export default function OrderPayment() {
           width: '100%',
         }}
       />
-      {filteredOrders.map((group, index) => (
+      {filteredGroups.map((group, index) => (
         <div
-        /*
-          key={`${group.date}-${group.group_name}-${index}`}
-          style={{
-            marginBottom: '20px',
-            padding: '16px',
-            border: '1px solid #ccc',
-            borderRadius: '8px',
-            backgroundColor: '#f9f9f9',
-          }}
-            */
-         // key={groupKey}
-         key={`${group.date}-${group.group_name}-${index}`}
+          key={`${group.date}-${group.group_name || group.name}-${index}`}
           style={{
             width: '50%',
             maxWidth: '800px',
@@ -159,19 +207,29 @@ export default function OrderPayment() {
             boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)',
             wordWrap: 'break-word',
             overflow: 'hidden',
-           // aspectRatio: '1.8 / 1',
+            marginBottom: '16px',
           }}
         >
-          <h3>
-            {group.date} - {group.group_name}
-          </h3>
+          <h3>{group.date}</h3>
+          {group.group_name && <strong>Group Name: {group.group_name}</strong>}
           <ul>
-            {group.items.map((item, idx) => (
+            {group.orderItems.map((item, idx) => (
               <li key={idx}>
-                <strong>{item.time}</strong>: {item.description}
+                <strong>{item.time}: </strong>
+                {item.description}
               </li>
             ))}
           </ul>
+          {group.name && (
+            <>
+              <strong>Work in Service: {group.name}</strong>
+              <ul>
+                {group.workItems.map((item, idx) => (
+                  <li key={idx}>{item.description}</li>
+                ))}
+              </ul>
+            </>
+          )}
           <div style={{ marginTop: '10px' }}>
             Payment for the day:
             <input
@@ -190,11 +248,11 @@ export default function OrderPayment() {
           </div>
         </div>
       ))}
-      {filteredOrders.length > 0 && (
+      {filteredGroups.length > 0 && (
         <>
           <div style={{ textAlign: 'center', marginTop: '20px' }}>
             <strong>
-              Period: {firstDate} - {lastDate}
+              Period: {period.firstDate} - {period.lastDate}
             </strong>
             <br />
             <strong>Total Payment: {totalPayment}</strong>
@@ -217,5 +275,8 @@ export default function OrderPayment() {
         </>
       )}
     </div>
+    <LogoutButton />
+ </>
+   
   );
 }
